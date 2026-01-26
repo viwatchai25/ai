@@ -27,7 +27,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# ส่วนหัวของระบบ
+# ส่วนหัวระบบ
 col1, col2, col3 = st.columns([1, 1.5, 1])
 with col2:
     try:
@@ -39,10 +39,9 @@ st.markdown("<h1 style='text-align: center;'>Digital CMRU Ai Service</h1>", unsa
 st.markdown("<p style='text-align: center; color: #666;'>ระบบบริการข้อมูลอัจฉริยะ มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
             unsafe_allow_html=True)
 
-# --- 3. การตั้งค่า API (แก้ไขเพื่อแก้ Error 404) ---
+# --- 3. การตั้งค่า API (ใช้ v1 Stable) ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
-    # บังคับใช้ API เวอร์ชัน v1 เพื่อความเสถียรและลดปัญหา Model Not Found
     client = genai.Client(
         api_key=API_KEY,
         http_options={'api_version': 'v1'}
@@ -61,8 +60,7 @@ def get_pdf_text(pdf_path):
                 reader = PyPDF2.PdfReader(f)
                 for page in reader.pages:
                     content = page.extract_text()
-                    if content:
-                        text += content
+                    if content: text += content
         except Exception as e:
             st.error(f"ไม่สามารถอ่านไฟล์ PDF ได้: {e}")
     return text
@@ -72,24 +70,21 @@ def get_pdf_text(pdf_path):
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# --- 6. ส่วน Admin (Sidebar) สำหรับอัปโหลดไฟล์ถาวร ---
+# --- 6. ส่วน Admin (Sidebar) ---
 with st.sidebar:
     st.markdown("### ⚙️ ผู้ดูแลระบบ (Admin)")
     admin_password = st.text_input("รหัสผ่าน", type="password")
 
     if admin_password == "admin123":
-        st.success("Admin Mode Active")
-        uploaded_file = st.file_uploader("อัปโหลดเอกสารความรู้ (PDF)", type="pdf")
+        uploaded_file = st.file_uploader("อัปโหลดฐานข้อมูลความรู้ (PDF)", type="pdf")
         if uploaded_file:
             with open("data.pdf", "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            st.success("อัปเดตไฟล์ข้อมูล data.pdf สำเร็จ!")
+            st.success("อัปเดตไฟล์ data.pdf สำเร็จ!")
 
     st.divider()
     if os.path.exists("data.pdf"):
         st.info("✅ ฐานข้อมูลพร้อมใช้งาน (Permanent)")
-    else:
-        st.warning("⚠️ ระบบยังไม่มีไฟล์ data.pdf")
 
 # --- 7. ส่วนแชทสำหรับผู้ใช้งาน ---
 st.divider()
@@ -98,25 +93,25 @@ for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("สอบถามข้อมูลของท่านได้ที่นี่..."):
+if prompt := st.chat_input("พิมพ์คำถามของท่านที่นี่..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     if os.path.exists("data.pdf"):
         with st.chat_message("assistant"):
-            with st.spinner("Digital CMRU AI กำลังประมวลผลคำตอบ..."):
+            with st.spinner("Digital CMRU AI กำลังประมวลผล..."):
                 try:
-                    # 1. อ่านข้อมูลจาก PDF
+                    # อ่าน Text จาก PDF ถาวรในเครื่อง
                     context_text = get_pdf_text("data.pdf")
 
-                    # 2. ส่งไปยังโมเดลที่รองรับ (ใช้ gemini-2.0-flash หรือรุ่นล่าสุดที่คุณมี)
+                    # เรียกใช้ Gemini พร้อมพารามิเตอร์ที่ถูกต้อง (system_instructions เติม s)
                     response = client.models.generate_content(
                         model="gemini-2.0-flash",
                         config=types.GenerateContentConfig(
-                            system_instruction=SYSTEM_PROMPT
+                            system_instructions=SYSTEM_PROMPT  # แก้ไขจุดนี้แล้วครับ
                         ),
-                        contents=[f"ข้อมูลจากเอกสาร PDF:\n{context_text}", f"คำถาม: {prompt}"]
+                        contents=[f"ข้อมูลอ้างอิง:\n{context_text}", f"คำถาม: {prompt}"]
                     )
 
                     st.markdown(response.text)
@@ -124,4 +119,4 @@ if prompt := st.chat_input("สอบถามข้อมูลของท่�
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาดในการประมวลผล: {e}")
     else:
-        st.warning("ขณะนี้ระบบยังไม่มีฐานข้อมูล กรุณาติดต่อ Admin เพื่ออัปโหลดไฟล์ครับ")
+        st.warning("ระบบยังไม่มีฐานข้อมูล กรุณาติดต่อ Admin อัปโหลดไฟล์ data.pdf")
