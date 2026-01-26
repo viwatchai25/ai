@@ -39,15 +39,32 @@ st.markdown("<h1 style='text-align: center;'>Digital CMRU Ai Service</h1>", unsa
 st.markdown("<p style='text-align: center; color: #666;'>ระบบบริการข้อมูลอัจฉริยะ มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
             unsafe_allow_html=True)
 
-# --- 3. การตั้งค่า API ---
+# --- 3. การตั้งค่า API และการค้นหาโมเดล ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
     client = genai.Client(
         api_key=API_KEY,
-        http_options={'api_version': 'v1beta'}  # เปลี่ยนเป็น v1beta เพื่อให้รองรับโมเดลใหม่ๆ ได้ดีขึ้น
+        http_options={'api_version': 'v1beta'}
     )
-except:
-    st.error("⚠️ ไม่พบ API Key ในระบบ Secrets")
+
+    # ระบบค้นหาโมเดลที่ใช้งานได้อัตโนมัติ
+    if "available_model" not in st.session_state:
+        models_list = client.models.list()
+        # ลำดับความสำคัญของโมเดลที่เราต้องการใช้
+        target_models = ["gemini-1.5-flash-latest", "gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]
+
+        found_model = "gemini-1.5-flash"  # ค่าเริ่มต้นถ้าหาไม่เจอจริงๆ
+        for target in target_models:
+            for m in models_list:
+                if target in m.name:
+                    found_model = m.name
+                    break
+            if found_model != "gemini-1.5-flash": break
+
+        st.session_state.available_model = found_model
+
+except Exception as e:
+    st.error(f"⚠️ เกิดข้อผิดพลาดในการเชื่อมต่อ API: {e}")
     st.stop()
 
 
@@ -84,7 +101,7 @@ with st.sidebar:
 
     st.divider()
     if os.path.exists("data.pdf"):
-        st.info("✅ ฐานข้อมูลพร้อมใช้งาน (Permanent)")
+        st.info(f"✅ ฐานข้อมูลพร้อมใช้ (Model: {st.session_state.available_model})")
 
 # --- 7. ส่วนแชทสำหรับผู้ใช้งาน ---
 st.divider()
@@ -104,9 +121,8 @@ if prompt := st.chat_input("พิมพ์คำถามของท่าน�
                 try:
                     context_text = get_pdf_text("data.pdf")
 
-                    # เปลี่ยนชื่อโมเดลเป็น gemini-1.5-flash-latest เพื่อแก้ปัญหา 404
                     response = client.models.generate_content(
-                        model="gemini-1.5-flash-latest",
+                        model=st.session_state.available_model,
                         contents=[
                             f"คำสั่งระบบ: {SYSTEM_PROMPT}",
                             f"ข้อมูลอ้างอิง: {context_text}",
@@ -117,11 +133,6 @@ if prompt := st.chat_input("พิมพ์คำถามของท่าน�
                     st.markdown(response.text)
                     st.session_state.chat_history.append({"role": "assistant", "content": response.text})
                 except Exception as e:
-                    if "429" in str(e):
-                        st.error("⚠️ โควตาการใช้งานเต็มชั่วคราว กรุณารอ 1-2 นาทีครับ")
-                    elif "404" in str(e):
-                        st.error("⚠️ ไม่พบโมเดลในระบบ (404) กรุณาแจ้งผู้พัฒนาเพื่อตรวจสอบชื่อโมเดลครับ")
-                    else:
-                        st.error(f"เกิดข้อผิดพลาด: {e}")
+                    st.error(f"เกิดข้อผิดพลาด: {e}")
     else:
         st.warning("กรุณาอัปโหลดไฟล์ data.pdf ก่อนใช้งานครับ")
