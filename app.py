@@ -3,6 +3,7 @@ from google import genai
 from google.genai import types
 import PyPDF2
 import os
+import time
 from PIL import Image
 
 # --- 1. กำหนดลักษณะการตอบ (Prompt Instruction) ---
@@ -21,12 +22,12 @@ st.set_page_config(page_title="Digital CMRU Ai Service", page_icon="🤖")
 st.markdown("""
     <style>
     .main { background-color: #f8f9fa; }
-    .stButton>button { background-color: #003399; color: white; border-radius: 8px; }
+    .stButton>button { background-color: #003399; color: white; border-radius: 8px; width: 100%; }
     h1 { color: #003399; font-family: 'Sarabun', sans-serif; }
     </style>
     """, unsafe_allow_html=True)
 
-# ส่วนหัวระบบ
+# ส่วนหัวของระบบ
 col1, col2, col3 = st.columns([1, 1.5, 1])
 with col2:
     try:
@@ -35,13 +36,17 @@ with col2:
         st.write("📌 **DIGITAL CMRU**")
 
 st.markdown("<h1 style='text-align: center;'>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #666;'>ระบบบริการข้อมูลถาวร มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
+st.markdown("<p style='text-align: center; color: #666;'>ระบบบริการข้อมูลอัจฉริยะ มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
             unsafe_allow_html=True)
 
-# --- 3. การตั้งค่า API ---
+# --- 3. การตั้งค่า API (แก้ไขเพื่อแก้ Error 404) ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
-    client = genai.Client(api_key=API_KEY)
+    # บังคับใช้ API เวอร์ชัน v1 เพื่อความเสถียรและลดปัญหา Model Not Found
+    client = genai.Client(
+        api_key=API_KEY,
+        http_options={'api_version': 'v1'}
+    )
 except:
     st.error("⚠️ กรุณาตั้งค่า API Key ในระบบ Secrets")
     st.stop()
@@ -51,12 +56,15 @@ except:
 def get_pdf_text(pdf_path):
     text = ""
     if os.path.exists(pdf_path):
-        with open(pdf_path, "rb") as f:
-            reader = PyPDF2.PdfReader(f)
-            for page in reader.pages:
-                content = page.extract_text()
-                if content:
-                    text += content
+        try:
+            with open(pdf_path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                for page in reader.pages:
+                    content = page.extract_text()
+                    if content:
+                        text += content
+        except Exception as e:
+            st.error(f"ไม่สามารถอ่านไฟล์ PDF ได้: {e}")
     return text
 
 
@@ -70,17 +78,18 @@ with st.sidebar:
     admin_password = st.text_input("รหัสผ่าน", type="password")
 
     if admin_password == "admin123":
-        uploaded_file = st.file_uploader("อัปโหลดไฟล์ฐานข้อมูล (จะถูกตั้งชื่อเป็น data.pdf)", type="pdf")
+        st.success("Admin Mode Active")
+        uploaded_file = st.file_uploader("อัปโหลดเอกสารความรู้ (PDF)", type="pdf")
         if uploaded_file:
             with open("data.pdf", "wb") as f:
                 f.write(uploaded_file.getbuffer())
-            st.success("อัปเดตไฟล์ข้อมูลถาวรสำเร็จ!")
+            st.success("อัปเดตไฟล์ข้อมูล data.pdf สำเร็จ!")
 
     st.divider()
     if os.path.exists("data.pdf"):
-        st.info("✅ ฐานข้อมูล PDF พร้อมใช้งาน (ถาวร)")
+        st.info("✅ ฐานข้อมูลพร้อมใช้งาน (Permanent)")
     else:
-        st.warning("⚠️ ยังไม่มีไฟล์ data.pdf ในระบบ")
+        st.warning("⚠️ ระบบยังไม่มีไฟล์ data.pdf")
 
 # --- 7. ส่วนแชทสำหรับผู้ใช้งาน ---
 st.divider()
@@ -89,25 +98,25 @@ for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("พิมพ์คำถามของท่านที่นี่..."):
+if prompt := st.chat_input("สอบถามข้อมูลของท่านได้ที่นี่..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     if os.path.exists("data.pdf"):
         with st.chat_message("assistant"):
-            with st.spinner("Digital CMRU AI กำลังประมวลผล..."):
+            with st.spinner("Digital CMRU AI กำลังประมวลผลคำตอบ..."):
                 try:
-                    # 1. อ่าน Text จาก PDF
+                    # 1. อ่านข้อมูลจาก PDF
                     context_text = get_pdf_text("data.pdf")
 
-                    # 2. ส่งคำถามไปที่ Gemini โดยแนบ Context ไปใน Prompt เลย
+                    # 2. ส่งไปยังโมเดลที่รองรับ (ใช้ gemini-2.0-flash หรือรุ่นล่าสุดที่คุณมี)
                     response = client.models.generate_content(
-                        model="gemini-1.5-flash",  # ใช้ Flash เพื่อความเร็ว
+                        model="gemini-2.0-flash",
                         config=types.GenerateContentConfig(
                             system_instruction=SYSTEM_PROMPT
                         ),
-                        contents=[f"ข้อมูลอ้างอิงจากเอกสาร:\n{context_text}", f"คำถามจากผู้ใช้: {prompt}"]
+                        contents=[f"ข้อมูลจากเอกสาร PDF:\n{context_text}", f"คำถาม: {prompt}"]
                     )
 
                     st.markdown(response.text)
@@ -115,4 +124,4 @@ if prompt := st.chat_input("พิมพ์คำถามของท่าน�
                 except Exception as e:
                     st.error(f"เกิดข้อผิดพลาดในการประมวลผล: {e}")
     else:
-        st.warning("ขออภัย ระบบยังไม่มีฐานข้อมูลสำหรับตอบคำถาม")
+        st.warning("ขณะนี้ระบบยังไม่มีฐานข้อมูล กรุณาติดต่อ Admin เพื่ออัปโหลดไฟล์ครับ")
