@@ -102,16 +102,17 @@ if prompt := st.chat_input("พิมพ์คำถามของท่าน�
         with st.chat_message("assistant"):
             with st.spinner("Digital CMRU AI กำลังประมวลผล..."):
                 try:
-                    # อ่าน Text จาก PDF ถาวรในเครื่อง
+                    # อ่าน Text จาก PDF
                     context_text = get_pdf_text("data.pdf")
 
-                    # เรียกใช้ Gemini พร้อมพารามิเตอร์ที่ถูกต้อง (system_instructions เติม s)
+                    # ส่ง Instruction, Context และคำถามไปใน contents โดยตรงเพื่อเลี่ยง Pydantic Error
                     response = client.models.generate_content(
                         model="gemini-2.0-flash",
-                        config=types.GenerateContentConfig(
-                            system_instructions=SYSTEM_PROMPT  # แก้ไขจุดนี้แล้วครับ
-                        ),
-                        contents=[f"ข้อมูลอ้างอิง:\n{context_text}", f"คำถาม: {prompt}"]
+                        contents=[
+                            f"คำสั่งระบบ: {SYSTEM_PROMPT}",
+                            f"ข้อมูลอ้างอิงจากเอกสาร: {context_text}",
+                            f"คำถามจากผู้ใช้งาน: {prompt}"
+                        ]
                     )
 
                     st.markdown(response.text)
