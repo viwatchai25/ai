@@ -7,59 +7,64 @@ from PIL import Image
 
 # --- 1. กำหนดลักษณะการตอบ (Prompt Instruction) ---
 SYSTEM_PROMPT = """
-บทบาท: คุณคือ Digital CMRU AI Service ผู้เชี่ยวชาญด้านข้อมูลอัจฉริยะ
+บทบาท: คุณคือ Digital CMRU AI Service ผู้เชี่ยวชาญด้านข้อมูลอัจฉริยะของมหาวิทยาลัยราชภัฏเชียงใหม่
 ลักษณะการตอบ:
-1. ให้ข้อมูลที่แม่นยำ สุภาพ และมีความเป็นมืออาชีพ
+1. ให้ข้อมูลที่แม่นยำ สุภาพ และมีความเป็นมืออาชีพ มีหางเสียง (ครับ/ค่ะ)
 2. ตอบคำถามโดยอ้างอิงข้อมูลจากไฟล์เอกสารที่ระบบ Digital CMRU มอบให้เท่านั้น
 3. หากไม่พบคำตอบในเอกสาร ให้ตอบว่า "ขออภัยครับ ไม่พบข้อมูลที่ท่านต้องการในฐานระบบ Digital CMRU ครับ"
-4. เน้นการสรุปประเด็นสำคัญให้เข้าใจง่าย
+4. เน้นการสรุปประเด็นสำคัญให้เข้าใจง่ายและชัดเจน
 """
 
-# --- 2. การตั้งค่าหน้าเว็บธีม IT & AI ---
+# --- 2. การตั้งค่าหน้าเว็บและ Theme ---
 st.set_page_config(
     page_title="Digital CMRU Ai Service",
     page_icon="🤖",
     layout="centered"
 )
 
-# Custom CSS สำหรับปรับแต่ง Theme
+# แก้ไข CSS และ Parameter unsafe_allow_html ให้ถูกต้อง
 st.markdown("""
     <style>
     .main {
-        background-color: #f5f7f9;
+        background-color: #f8f9fa;
     }
     .stButton>button {
-        background-color: #1a237e;
+        background-color: #003399;
         color: white;
-        border-radius: 10px;
+        border-radius: 8px;
+        width: 100%;
     }
-    .stTextInput>div>div>input {
-        border-radius: 10px;
+    .stChatInputContainer {
+        padding-bottom: 20px;
+    }
+    h1 {
+        color: #003399;
+        font-family: 'Sarabun', sans-serif;
     }
     </style>
-    """, unsafe_allow_stdio=True)
+    """, unsafe_allow_html=True)
 
 # --- 3. ส่วนหัวของระบบพร้อมโลโก้ ---
-col1, col2, col3 = st.columns([1, 2, 1])
+col1, col2, col3 = st.columns([1, 1.5, 1])
 with col2:
-    # ตรวจสอบชื่อไฟล์โลโก้ที่คุณอัปโหลดขึ้น GitHub (สมมติว่าชื่อ logo.png)
     try:
+        # ดึงรูปจากไฟล์ 795.jpg ที่คุณอัปโหลด
         image = Image.open('795.jpg')
         st.image(image, use_container_width=True)
-    except:
-        st.header("🌐 DIGITAL CMRU")
+    except Exception:
+        st.write("📌 **DIGITAL CMRU**")
 
-st.markdown("<h1 style='text-align: center; color: #1a237e;'>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #5c6bc0;'>ระบบบริการข้อมูลอัจฉริยะ มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
+st.markdown("<h1 style='text-align: center;'>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #666;'>ระบบบริการข้อมูลอัจฉริยะ มหาวิทยาลัยราชภัฏเชียงใหม่</p>",
             unsafe_allow_html=True)
 
 # --- 4. การตั้งค่า API ---
-# ใช้ Secrets จาก Streamlit Cloud เพื่อความปลอดภัย
 try:
+    # ดึงค่าจาก Streamlit Secrets (ต้องตั้งค่าในหน้าเว็บ Streamlit Cloud)
     API_KEY = st.secrets["GEMINI_API_KEY"]
     client = genai.Client(api_key=API_KEY)
-except:
-    st.error("กรุณาตั้งค่า GEMINI_API_KEY ใน Streamlit Secrets")
+except Exception:
+    st.error("⚠️ ไม่พบ API Key กรุณาตั้งค่า GEMINI_API_KEY ใน Settings > Secrets")
     st.stop()
 
 DB_FILE = "file_id.txt"
@@ -85,17 +90,18 @@ if "file_id" not in st.session_state:
 
 # --- 6. ส่วน Admin (Sidebar) ---
 with st.sidebar:
-    st.image("795.jpg", width=100)
-    st.header("⚙️ Admin Control")
-    admin_password = st.text_input("รหัสผ่านผู้ดูแลระบบ", type="password")
+    st.markdown("### ⚙️ ผู้ดูแลระบบ")
+    admin_password = st.text_input("กรอกรหัสผ่าน", type="password")
 
     if admin_password == "admin123":
-        uploaded_file = st.file_uploader("อัปโหลดฐานข้อมูลความรู้ (PDF)", type="pdf")
+        st.success("เข้าสู่ระบบสำเร็จ")
+        uploaded_file = st.file_uploader("อัปโหลดเอกสารความรู้ (PDF)", type="pdf")
         if uploaded_file:
-            with st.spinner("กำลังอัปเดตระบบ AI..."):
+            with st.spinner("กำลังประมวลผลไฟล์..."):
                 with open("temp_master.pdf", "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
+                # ใช้ parameter 'file' ตาม SDK ล่าสุด
                 google_file = client.files.upload(file="temp_master.pdf")
                 while google_file.state.name == "PROCESSING":
                     time.sleep(2)
@@ -103,26 +109,34 @@ with st.sidebar:
 
                 st.session_state.file_id = google_file.name
                 save_file_id(google_file.name)
-                st.success("อัปเดตฐานข้อมูล Digital CMRU เรียบร้อย!")
+                st.success("อัปเดตข้อมูลสำเร็จ!")
+                # ลบไฟล์ชั่วคราว
+                if os.path.exists("temp_master.pdf"):
+                    os.remove("temp_master.pdf")
 
+    st.divider()
     if st.session_state.file_id:
-        st.caption("✅ ระบบ AI พร้อมให้บริการ")
+        st.info("✅ ฐานข้อมูลพร้อมใช้งาน")
+    else:
+        st.warning("❌ ยังไม่มีข้อมูลในระบบ")
 
-# --- 7. ส่วนหน้าจอแชทสำหรับผู้ใช้งาน ---
+# --- 7. ส่วนแชทสำหรับผู้ใช้งาน ---
 st.divider()
 
+# แสดงประวัติการสนทนา
 for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input("สอบถามข้อมูลที่ท่านต้องการทราบ..."):
+# รับคำถามจาก User
+if prompt := st.chat_input("พิมพ์คำถามของท่านที่นี่..."):
     st.session_state.chat_history.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     if st.session_state.file_id:
         with st.chat_message("assistant"):
-            with st.spinner("AI กำลังค้นหาคำตอบ..."):
+            with st.spinner("Digital CMRU AI กำลังหาคำตอบ..."):
                 try:
                     target_file = client.files.get(name=st.session_state.file_id)
                     response = client.models.generate_content(
@@ -135,6 +149,6 @@ if prompt := st.chat_input("สอบถามข้อมูลที่ท่�
                     st.markdown(response.text)
                     st.session_state.chat_history.append({"role": "assistant", "content": response.text})
                 except Exception as e:
-                    st.error("ขออภัย ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้ง")
+                    st.error("ขออภัย ระบบขัดข้องชั่วคราว (ไฟล์อาจหมดอายุ 48 ชม.) กรุณาให้ Admin อัปโหลดใหม่")
     else:
-        st.warning("ขณะนี้ยังไม่มีข้อมูลในระบบ Digital CMRU Ai")
+        st.warning("ขณะนี้ยังไม่มีข้อมูลในระบบ กรุณารอ Admin อัปโหลดฐานข้อมูลครับ")
