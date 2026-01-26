@@ -16,13 +16,11 @@ SYSTEM_PROMPT = """
 st.set_page_config(page_title="Digital CMRU Ai Service", page_icon="🤖")
 
 
-# --- 3. ฟังก์ชันดึงรายการ API Keys ทั้งหมดที่มีใน Secrets ---
+# --- 3. ฟังก์ชันดึงรายการ API Keys ทั้งหมด ---
 def get_all_api_keys():
     keys = []
-    # ตรวจสอบ Key หลัก
     if "GEMINI_API_KEY" in st.secrets:
         keys.append(st.secrets["GEMINI_API_KEY"])
-    # ตรวจสอบ Key สำรองตัวอื่นๆ (Key_2, Key_3, ...)
     i = 2
     while f"GEMINI_API_KEY_{i}" in st.secrets:
         keys.append(st.secrets[f"GEMINI_API_KEY_{i}"])
@@ -30,16 +28,13 @@ def get_all_api_keys():
     return keys
 
 
-# --- 4. ฟังก์ชันสร้าง Client ตามลำดับ Key ปัจจุบัน ---
+# --- 4. ฟังก์ชันสร้าง Client ---
 def get_gemini_client():
     available_keys = get_all_api_keys()
     if not available_keys:
         st.error("⚠️ ไม่พบ API Key ในระบบ Secrets")
         st.stop()
-
-    # ใช้ค่า index จาก session_state มาเลือก Key (ใช้ % เพื่อให้วนลูปกลับมาตัวแรกได้)
     current_idx = st.session_state.get("key_index", 0) % len(available_keys)
-
     return genai.Client(
         api_key=available_keys[current_idx],
         http_options={'api_version': 'v1beta'}
@@ -90,9 +85,9 @@ with st.sidebar:
     st.divider()
     total_keys = len(get_all_api_keys())
     current_key_num = (st.session_state.key_index % total_keys) + 1
-    st.info(f"🔑 กำลังใช้ Account ที่: {current_key_num} จากทั้งหมด {total_keys}")
+    st.info(f"🔑 ใช้ Account ที่: {current_key_num}/{total_keys}")
 
-# --- 8. ส่วนแชทและระบบ Auto-Switch Key ---
+# --- 8. ส่วนแชทและระบบ Auto-Switch Model & Key ---
 st.divider()
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -106,38 +101,44 @@ if prompt := st.chat_input("พิมพ์คำถามที่นี่..."
         with st.chat_message("assistant"):
             with st.spinner("กำลังประมวลผล..."):
                 all_keys = get_all_api_keys()
-                max_attempts = len(all_keys)
-                attempts = 0
+                # รายชื่อโมเดลสำรอง (Fallback Models) เพื่อแก้ปัญหา 404
+                model_names = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash-exp"]
+
                 success = False
+                key_attempts = 0
 
-                while not success and attempts < max_attempts:
-                    try:
-                        client = get_gemini_client()
-                        context = get_pdf_text("data.pdf")
+                while not success and key_attempts < len(all_keys):
+                    client = get_gemini_client()
+                    context = get_pdf_text("data.pdf")
 
-                        response = client.models.generate_content(
-                            model="gemini-1.5-flash-latest",
-                            contents=[
-                                f"Instruction: {SYSTEM_PROMPT}",
-                                f"Context: {context}",
-                                f"Query: {prompt}"
-                            ]
-                        )
-                        st.markdown(response.text)
-                        st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                        success = True
-                    except Exception as e:
-                        if "429" in str(e):  # กรณีโควตาเต็ม
-                            st.session_state.key_index += 1  # สลับ index ไปตัวถัดไป
-                            attempts += 1
-                            if attempts < max_attempts:
-                                st.warning(
-                                    f"โควตา Account ที่ {attempts} เต็ม กำลังสลับไปใช้ Account ที่ {attempts + 1}...")
-                                time.sleep(1)  # รอเล็กน้อยก่อนลองใหม่
+                    # ลองทีละโมเดลในรายการ Fallback
+                    for model_name in model_names:
+                        try:
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=[
+                                    f"Instruction: {SYSTEM_PROMPT}",
+                                    f"Context: {context}",
+                                    f"Query: {prompt}"
+                                ]
+                            )
+                            st.markdown(response.text)
+                            st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                            success = True
+                            break  # ถ้าสำเร็จให้ออกจากลูปโมเดล
+                        except Exception as e:
+                            if "404" in str(e):
+                                continue  # ถ้าหาโมเดลนี้ไม่เจอ ให้ลองตัวถัดไปในลิสต์
+                            elif "429" in str(e):
+                                st.session_state.key_index += 1  # สลับ Key ถ้าโควตาเต็ม
+                                key_attempts += 1
+                                break  # ออกจากลูปโมเดลเพื่อไปลอง Key ใหม่
                             else:
-                                st.error("⚠️ ขออภัยครับ โควตาทุก Account เต็มแล้วจริงๆ กรุณารอสัก 2-3 นาทีครับ")
-                        else:
-                            st.error(f"เกิดข้อผิดพลาดทางเทคนิค: {e}")
-                            break
+                                st.error(f"เกิดข้อผิดพลาด: {e}")
+                                success = True  # หยุดลูปเพื่อไม่ให้ค้าง
+                                break
+
+                    if not success and "429" not in str(e):
+                        break  # ถ้าลองทุกโมเดลแล้วไม่ใช่ปัญหาโควตา ให้หยุด
     else:
         st.warning("กรุณาอัปโหลดไฟล์ข้อมูลก่อนครับ")
