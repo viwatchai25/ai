@@ -16,7 +16,7 @@ SYSTEM_PROMPT = """
 st.set_page_config(page_title="Digital CMRU Ai Service", page_icon="🤖")
 
 
-# --- 3. ฟังก์ชันดึงรายการ API Keys ทั้งหมด ---
+# --- 3. ฟังก์ชันดึงรายการ API Keys ---
 def get_all_api_keys():
     keys = []
     if "GEMINI_API_KEY" in st.secrets:
@@ -51,8 +51,8 @@ def get_pdf_text(pdf_path):
                 for page in reader.pages:
                     content = page.extract_text()
                     if content: text += content
-        except:
-            pass
+        except Exception as e:
+            st.warning(f"อ่านไฟล์ PDF ไม่ได้: {e}")
     return text
 
 
@@ -73,22 +73,21 @@ with col2:
 st.markdown("<h1 style='text-align: center;'>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
 
 with st.sidebar:
-    st.header("⚙️ Admin")
+    st.header("⚙️ Admin Control")
     admin_pw = st.text_input("รหัสผ่าน", type="password")
     if admin_pw == "admin123":
-        up_file = st.file_uploader("อัปโหลด PDF", type="pdf")
+        up_file = st.file_uploader("อัปโหลดไฟล์ PDF (data.pdf)", type="pdf")
         if up_file:
             with open("data.pdf", "wb") as f:
                 f.write(up_file.getbuffer())
-            st.success("อัปเดตไฟล์สำเร็จ!")
+            st.success("อัปเดตไฟล์สำเร็จ! กรุณาลองถามคำถามใหม่")
 
     st.divider()
     all_keys = get_all_api_keys()
-    total_keys = len(all_keys)
-    current_key_num = (st.session_state.key_index % total_keys) + 1
-    st.info(f"🔑 ใช้ Account ที่: {current_key_num}/{total_keys}")
+    current_key_num = (st.session_state.key_index % len(all_keys)) + 1
+    st.info(f"🔑 Account: {current_key_num}/{len(all_keys)}")
 
-# --- 8. ส่วนแชทและระบบ Auto-Switch Model & Key (Fixed NameError) ---
+# --- 8. ส่วนแชทและระบบแสดงผลคำตอบ ---
 st.divider()
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -100,46 +99,56 @@ if prompt := st.chat_input("พิมพ์คำถามที่นี่..."
 
     if os.path.exists("data.pdf"):
         with st.chat_message("assistant"):
-            with st.spinner("กำลังประมวลผล..."):
+            with st.spinner("Digital CMRU AI กำลังหาคำตอบ..."):
                 all_keys = get_all_api_keys()
-                model_names = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash-8b"]
+                # รายชื่อโมเดลที่เสถียรที่สุดสำหรับ v1beta
+                model_names = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash-exp"]
+
+                context = get_pdf_text("data.pdf")
+                if not context:
+                    st.error("❌ ไม่สามารถดึงข้อมูลจากไฟล์ PDF ได้ กรุณาลองอัปโหลดไฟล์ใหม่อีกครั้ง")
+                    st.stop()
 
                 success = False
                 key_attempts = 0
-                last_error = ""  # ใช้เก็บ Error ล่าสุดเพื่อเลี่ยง NameError
 
+                # ลูปผ่าน API Keys
                 while not success and key_attempts < len(all_keys):
                     client = get_gemini_client()
-                    context = get_pdf_text("data.pdf")
 
+                    # ลูปผ่านชื่อโมเดล
                     for model_name in model_names:
                         try:
                             response = client.models.generate_content(
                                 model=model_name,
                                 contents=[
-                                    f"Instruction: {SYSTEM_PROMPT}",
-                                    f"Context: {context}",
-                                    f"Query: {prompt}"
+                                    f"System Instruction: {SYSTEM_PROMPT}",
+                                    f"Reference Context: {context}",
+                                    f"User Question: {prompt}"
                                 ]
                             )
-                            st.markdown(response.text)
-                            st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                            success = True
-                            break
-                        except Exception as error_obj:
-                            last_error = str(error_obj)
-                            if "404" in last_error:
-                                continue
-                            elif "429" in last_error:
+
+                            # ตรวจสอบว่ามีคำตอบออกมาจริงไหม
+                            if response and response.text:
+                                st.markdown(response.text)
+                                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                                success = True
+                                break
+                        except Exception as e:
+                            err_msg = str(e)
+                            if "429" in err_msg:  # โควตาเต็ม
                                 st.session_state.key_index += 1
                                 key_attempts += 1
                                 break
+                            elif "404" in err_msg:  # หาโมเดลไม่เจอ
+                                continue
                             else:
-                                st.error(f"เกิดข้อผิดพลาด: {last_error}")
+                                # ถ้าเป็น error อื่นๆ ให้แสดงผลเพื่อให้ทราบปัญหา
+                                st.error(f"⚠️ พบข้อผิดพลาด: {err_msg}")
                                 success = True
                                 break
 
-                    if not success and "429" not in last_error:
-                        break
+                    if not success and key_attempts >= len(all_keys):
+                        st.error("⚠️ โควตาทุก Account เต็มแล้วจริงๆ กรุณารอสักครู่ครับ")
     else:
-        st.warning("กรุณาอัปโหลดไฟล์ข้อมูลก่อนครับ")
+        st.warning("⚠️ ยังไม่มีฐานข้อมูล กรุณาให้ Admin อัปโหลดไฟล์ data.pdf ก่อนครับ")
