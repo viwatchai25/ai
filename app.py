@@ -32,7 +32,7 @@ with col2:
 st.markdown("<h1>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
 
 
-# --- 3. ฟังก์ชันเชื่อมต่อ API และค้นหาโมเดลอัตโนมัติ (หัวใจสำคัญ) ---
+# --- 3. ฟังก์ชันเชื่อมต่อ API และค้นหาโมเดล (แก้ไขจุดที่ Error) ---
 @st.cache_resource
 def configure_genai():
     try:
@@ -40,28 +40,32 @@ def configure_genai():
         # ใช้ v1beta เพื่อให้เห็นโมเดลเยอะที่สุด
         client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
 
-        # ค้นหาโมเดลที่ใช้ได้จริง (เลิกเดาชื่อ)
+        # ดึงรายชื่อโมเดลทั้งหมด
         available_models = client.models.list()
         selected_model = None
 
-        # ลำดับความสำคัญ: อยากได้ Flash > Pro > อะไรก็ได้ที่เจนข้อความได้
-        priority_keywords = ["flash", "pro", "gemini"]
+        # คำค้นหาตามลำดับความต้องการ (Flash เร็วและถูกที่สุด > Pro เก่งกว่า > หรือรุ่นอื่นๆ)
+        priority_keywords = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+
+        # วนลูปหาโมเดลที่ชื่อตรงกับที่เราอยากได้ (ตัดการเช็ค attribute ที่ error ออก)
+        # เราแปลงเป็น list ก่อนเพื่อความชัวร์ในการวนลูป
+        model_list = list(available_models)
 
         for keyword in priority_keywords:
-            for m in available_models:
-                # เลือกเฉพาะโมเดลที่รองรับการสร้างเนื้อหา (generateContent)
-                if "generateContent" in m.supported_generation_methods:
-                    if keyword in m.name.lower():
-                        selected_model = m.name
-                        break
+            for m in model_list:
+                # ตรวจสอบแค่ชื่อก็เพียงพอแล้ว
+                if keyword in m.name:
+                    selected_model = m.name
+                    break
             if selected_model: break
 
         if not selected_model:
-            # ถ้าหาไม่เจอจริงๆ ให้ใช้ค่า Default มาตรฐาน
+            # ถ้าหาไม่เจอเลย ให้ลองใช้ชื่อ default (เผื่อฟลุ๊ค)
             selected_model = "gemini-1.5-flash"
 
         return client, selected_model
     except Exception as e:
+        # แสดง error แต่ไม่หยุดโปรแกรม เพื่อให้ user เห็นปัญหา
         st.error(f"⚠️ ตั้งค่าระบบไม่สำเร็จ: {e}")
         return None, None
 
@@ -97,7 +101,12 @@ with st.sidebar:
 
     st.divider()
     if MODEL_NAME:
-        st.caption(f"🚀 Running on: **{MODEL_NAME.split('/')[-1]}**")
+        # แสดงชื่อโมเดลสั้นๆ (ตัด parts/models/ ออก)
+        display_name = MODEL_NAME.split('/')[-1]
+        st.caption(f"🚀 Model: **{display_name}**")
+    else:
+        st.error("❌ No Model Found")
+
     if os.path.exists("data.pdf"):
         st.info("✅ Database Ready")
 
@@ -111,14 +120,14 @@ if prompt := st.chat_input("ถามข้อมูลได้เลยคร�
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if os.path.exists("data.pdf") and client:
+    if os.path.exists("data.pdf") and client and MODEL_NAME:
         with st.chat_message("assistant"):
             with st.spinner(f"AI กำลังค้นหาคำตอบ..."):
                 try:
                     context = get_pdf_text("data.pdf")
 
                     response = client.models.generate_content(
-                        model=MODEL_NAME,  # ใช้ชื่อที่ระบบหามาให้ ไม่ Error แน่นอน
+                        model=MODEL_NAME,  # ใช้ชื่อที่ระบบหามาให้
                         contents=[
                             f"System: {SYSTEM_PROMPT}",
                             f"Context: {context}",
@@ -132,4 +141,7 @@ if prompt := st.chat_input("ถามข้อมูลได้เลยคร�
                     if "429" in str(e):
                         st.warning("⚠️ โควตาเต็มชั่วคราว กรุณารอ 30 วินาที")
     else:
-        st.warning("กรุณาอัปโหลดไฟล์ PDF ก่อนใช้งาน")
+        if not os.path.exists("data.pdf"):
+            st.warning("กรุณาอัปโหลดไฟล์ PDF ก่อนใช้งาน")
+        if not client or not MODEL_NAME:
+            st.error("ระบบ AI ยังไม่พร้อมทำงาน (ตรวจสอบ API Key)")
