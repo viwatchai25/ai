@@ -83,11 +83,12 @@ with st.sidebar:
             st.success("อัปเดตไฟล์สำเร็จ!")
 
     st.divider()
-    total_keys = len(get_all_api_keys())
+    all_keys = get_all_api_keys()
+    total_keys = len(all_keys)
     current_key_num = (st.session_state.key_index % total_keys) + 1
     st.info(f"🔑 ใช้ Account ที่: {current_key_num}/{total_keys}")
 
-# --- 8. ส่วนแชทและระบบ Auto-Switch Model & Key ---
+# --- 8. ส่วนแชทและระบบ Auto-Switch Model & Key (Fixed NameError) ---
 st.divider()
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -101,17 +102,16 @@ if prompt := st.chat_input("พิมพ์คำถามที่นี่..."
         with st.chat_message("assistant"):
             with st.spinner("กำลังประมวลผล..."):
                 all_keys = get_all_api_keys()
-                # รายชื่อโมเดลสำรอง (Fallback Models) เพื่อแก้ปัญหา 404
-                model_names = ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-2.0-flash-exp"]
+                model_names = ["gemini-1.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash-8b"]
 
                 success = False
                 key_attempts = 0
+                last_error = ""  # ใช้เก็บ Error ล่าสุดเพื่อเลี่ยง NameError
 
                 while not success and key_attempts < len(all_keys):
                     client = get_gemini_client()
                     context = get_pdf_text("data.pdf")
 
-                    # ลองทีละโมเดลในรายการ Fallback
                     for model_name in model_names:
                         try:
                             response = client.models.generate_content(
@@ -125,20 +125,21 @@ if prompt := st.chat_input("พิมพ์คำถามที่นี่..."
                             st.markdown(response.text)
                             st.session_state.chat_history.append({"role": "assistant", "content": response.text})
                             success = True
-                            break  # ถ้าสำเร็จให้ออกจากลูปโมเดล
-                        except Exception as e:
-                            if "404" in str(e):
-                                continue  # ถ้าหาโมเดลนี้ไม่เจอ ให้ลองตัวถัดไปในลิสต์
-                            elif "429" in str(e):
-                                st.session_state.key_index += 1  # สลับ Key ถ้าโควตาเต็ม
+                            break
+                        except Exception as error_obj:
+                            last_error = str(error_obj)
+                            if "404" in last_error:
+                                continue
+                            elif "429" in last_error:
+                                st.session_state.key_index += 1
                                 key_attempts += 1
-                                break  # ออกจากลูปโมเดลเพื่อไปลอง Key ใหม่
+                                break
                             else:
-                                st.error(f"เกิดข้อผิดพลาด: {e}")
-                                success = True  # หยุดลูปเพื่อไม่ให้ค้าง
+                                st.error(f"เกิดข้อผิดพลาด: {last_error}")
+                                success = True
                                 break
 
-                    if not success and "429" not in str(e):
-                        break  # ถ้าลองทุกโมเดลแล้วไม่ใช่ปัญหาโควตา ให้หยุด
+                    if not success and "429" not in last_error:
+                        break
     else:
         st.warning("กรุณาอัปโหลดไฟล์ข้อมูลก่อนครับ")
