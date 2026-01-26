@@ -21,7 +21,9 @@ st.set_page_config(page_title="AI Knowledge Bot", layout="centered")
 st.title("📚 ระบบสืบค้นข้อมูลอัจฉริยะ")
 
 # --- ส่วนการตั้งค่า API ---
-API_KEY = "AIzaSyD0JEWioERfi1TZfGA-qKmD4JmYVjf5uEA"
+#API_KEY = "xxxxx"
+# แก้จาก API_KEY = "AIza..." เป็นตัวนี้
+API_KEY = st.secrets["GEMINI_API_KEY"]
 client = genai.Client(api_key=API_KEY)
 
 DB_FILE = "file_id.txt"
