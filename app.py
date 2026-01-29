@@ -37,7 +37,7 @@ st.markdown("<h1>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
 def get_client():
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
-        # ลองใช้ v1beta เพราะมักจะเห็นโมเดลเยอะกว่า
+        # ใช้ v1beta เพื่อความเข้ากันได้สูงสุด
         return genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
     except Exception as e:
         st.error(f"⚠️ Key Error: {e}")
@@ -47,7 +47,7 @@ def get_client():
 client = get_client()
 
 
-# --- 4. ฟังก์ชัน PDF ---
+# --- 4. ฟังก์ชัน PDF (ตัดทอนข้อมูลป้องกัน System Busy) ---
 def get_pdf_text(pdf_path):
     text = ""
     if os.path.exists(pdf_path):
@@ -57,17 +57,16 @@ def get_pdf_text(pdf_path):
                 for page in reader.pages:
                     c = page.extract_text()
                     if c: text += c
-            # ตัดทอนข้อมูล 40k
+            # ตัดทอนข้อมูลเหลือ 40,000 ตัวอักษร
             if len(text) > 40000: text = text[:40000]
         except:
             pass
     return text
 
 
-# --- 5. Admin & Diagnostics (จุดสำคัญแก้ปัญหา) ---
+# --- 5. Admin & Model Selector (แก้ Code Error ตรงนี้) ---
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
-# ตัวแปรเก็บชื่อโมเดลที่ค้นเจอ
 FOUND_MODEL = None
 
 with st.sidebar:
@@ -78,48 +77,45 @@ with st.sidebar:
             st.success("Saved!")
 
     st.divider()
-    st.subheader("🛠️ System Diagnostics")
+    st.subheader("🛠️ Connection Status")
 
     if client:
         try:
-            # 1. ดึงรายชื่อโมเดลทั้งหมดออกมาดู
-            with st.spinner("Checking models..."):
-                models = list(client.models.list())
+            # 1. ดึงรายชื่อโมเดล (แบบปลอดภัย ไม่เช็ค attribute ลึก)
+            models = list(client.models.list())
 
-            # 2. กรองหาโมเดลที่ใช้ generateContent ได้
-            valid_models = []
+            # 2. แปลงเป็น list ของ "ชื่อ" (String) เท่านั้น เพื่อความง่าย
+            model_names = []
             for m in models:
-                if "generateContent" in m.supported_generation_methods:
-                    # ตัด gemini-2.0 ออกเพราะโควตา 0
-                    if "gemini-2.0" not in m.name:
-                        valid_models.append(m.name)
+                # เช็คแค่ว่ามี attribute 'name' หรือไม่ (มาตรฐานสุดๆ)
+                if hasattr(m, 'name'):
+                    model_names.append(m.name)
 
-            # 3. เลือกโมเดลที่ดีที่สุดจากรายการที่มีอยู่จริง
-            if valid_models:
-                # ลำดับความชอบ: Flash > Pro > 1.0
-                priority = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
+            # 3. ค้นหาโมเดลที่ต้องการจากชื่อ
+            # ลำดับความสำคัญ: Flash (เร็ว/ถูก) > Pro (เก่ง)
+            priority_keywords = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]
 
-                for p in priority:
-                    for v in valid_models:
-                        if p in v:
-                            FOUND_MODEL = v
-                            break
-                    if FOUND_MODEL: break
+            for keyword in priority_keywords:
+                for name in model_names:
+                    # กรองเอาเฉพาะตัวที่ไม่ใช่ 2.0 (เพราะโควตา 0) และมี keyword ที่เราอยากได้
+                    if keyword in name and "gemini-2.0" not in name:
+                        FOUND_MODEL = name
+                        break
+                if FOUND_MODEL: break
 
-                # ถ้ายังไม่เจอใน priority ให้เอาตัวแรกที่มีเลย
-                if not FOUND_MODEL:
-                    FOUND_MODEL = valid_models[0]
-
-                st.success(f"✅ Active Model: **{FOUND_MODEL.split('/')[-1]}**")
-                with st.expander("ดูรายชื่อโมเดลทั้งหมด"):
-                    st.write(valid_models)
+            # Fallback: ถ้าหาไม่เจอเลย ให้ใช้ Hardcode ค่ามาตรฐาน
+            if not FOUND_MODEL:
+                FOUND_MODEL = "models/gemini-1.5-flash"
+                st.warning("⚠️ ใช้ค่า Default Model (เนื่องจากค้นหาไม่เจอ)")
             else:
-                st.error("❌ Key นี้ไม่พบโมเดลที่ใช้งานได้เลย")
+                st.success(f"✅ Active: **{FOUND_MODEL.split('/')[-1]}**")
 
         except Exception as e:
-            st.error(f"Error Checking Models: {e}")
+            # ถ้า API List พังจริงๆ ให้บังคับใช้ค่านี้ไปเลย
+            FOUND_MODEL = "models/gemini-1.5-flash"
+            st.error(f"List Error (Using Default): {e}")
 
-# --- 6. Chat Logic ---
+# --- 6. Chat Logic (Retry System) ---
 st.divider()
 for msg in st.session_state.chat_history:
     with st.chat_message(msg["role"]): st.markdown(msg["content"])
@@ -131,24 +127,53 @@ if prompt := st.chat_input("ถามข้อมูลได้เลยคร�
 
     if os.path.exists("data.pdf") and client and FOUND_MODEL:
         with st.chat_message("assistant"):
-            with st.spinner(f"AI ({FOUND_MODEL.split('/')[-1]}) กำลังทำงาน..."):
+            with st.spinner(f"AI กำลังทำงาน..."):
                 try:
                     context = get_pdf_text("data.pdf")
 
-                    # เรียกใช้โมเดลที่ค้นเจอมาแล้ว (ไม่ต้องเดาชื่อ)
-                    response = client.models.generate_content(
-                        model=FOUND_MODEL,
-                        contents=[f"System: {SYSTEM_PROMPT}", f"Context: {context}", f"User: {prompt}"]
-                    )
-                    st.markdown(response.text)
-                    st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                    # Retry Logic แบบง่าย
+                    success = False
+                    for i in range(3):  # ลอง 3 ครั้ง
+                        try:
+                            response = client.models.generate_content(
+                                model=FOUND_MODEL,
+                                contents=[f"System: {SYSTEM_PROMPT}", f"Context: {context}", f"User: {prompt}"]
+                            )
+                            st.markdown(response.text)
+                            st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+                            success = True
+                            break
+                        except Exception as e:
+                            # ถ้าเป็น 429 ให้รอ
+                            if "429" in str(e):
+                                time.sleep(2)
+                                continue
+                            elif "404" in str(e):
+                                # ถ้าชื่อโมเดลผิด ลองเปลี่ยนชื่อหน้างาน
+                                try:
+                                    fallback_model = "gemini-1.5-flash-latest"
+                                    response = client.models.generate_content(
+                                        model=fallback_model,
+                                        contents=[f"System: {SYSTEM_PROMPT}", f"Context: {context}", f"User: {prompt}"]
+                                    )
+                                    st.markdown(response.text)
+                                    st.session_state.chat_history.append(
+                                        {"role": "assistant", "content": response.text})
+                                    success = True
+                                    break
+                                except:
+                                    continue
+                            else:
+                                st.error(f"Error: {e}")
+                                break
+
+                    if not success:
+                        st.error("⚠️ ระบบไม่สามารถตอบกลับได้ในขณะนี้ (ลองกดถามใหม่อีกครั้ง)")
 
                 except Exception as e:
-                    st.error(f"เกิดข้อผิดพลาด: {e}")
-                    if "429" in str(e):
-                        st.info("💡 ระบบทำงานหนัก กรุณารอ 5-10 วินาที")
+                    st.error(f"Critical Error: {e}")
     else:
-        if not FOUND_MODEL:
-            st.error("⚠️ ไม่สามารถระบุโมเดลได้ (ตรวจสอบ API Key)")
-        elif not os.path.exists("data.pdf"):
+        if not os.path.exists("data.pdf"):
             st.warning("กรุณาอัปโหลด PDF ก่อนใช้งาน")
+        elif not FOUND_MODEL:
+            st.error("ตรวจสอบ API Key")
