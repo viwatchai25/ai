@@ -32,70 +32,63 @@ with col2:
 st.markdown("<h1>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
 
 
-# --- 3. เชื่อมต่อ API (Auto-Discovery) ---
+# --- 3. ตั้งค่า Client (บังคับใช้ 1.5 Flash เท่านั้น) ---
 @st.cache_resource
 def setup_genai():
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
+        # ใช้ v1beta เพื่อความเข้ากันได้
         client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
-
-        # ค้นหาโมเดลอัตโนมัติ
-        try:
-            available_models = list(client.models.list())
-            target_model = None
-            # เน้นหา Flash ก่อน เพราะเร็วและรองรับ Context ยาว
-            keywords = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-
-            for kw in keywords:
-                for m in available_models:
-                    if kw in m.name:
-                        target_model = m.name
-                        break
-                if target_model: break
-        except:
-            # ถ้า list models ไม่ได้ ให้ใช้ค่า Default
-            target_model = "models/gemini-1.5-flash"
-
-        if not target_model: target_model = "models/gemini-1.5-flash"
-
-        return client, target_model
+        return client
     except Exception as e:
         st.error(f"⚠️ Key Error: {e}")
-        return None, None
+        return None
 
 
-client, MODEL_NAME = setup_genai()
+client = setup_genai()
 
 
-# --- 4. ฟังก์ชัน Retry Logic (ปรับปรุงใหม่ แสดง Error จริง) ---
-def generate_safe(client, model, contents):
+# --- 4. ฟังก์ชัน Retry Logic (หัวใจสำคัญ) ---
+def generate_safe(client, contents):
+    # รายชื่อโมเดลที่ "อนุญาต" ให้ใช้ (ตัด 2.0 ทิ้งไปเลย)
+    safe_models = [
+        "gemini-1.5-flash",  # ตัวเลือกที่ 1 (เสถียรสุด)
+        "models/gemini-1.5-flash",  # ตัวเลือกที่ 2 (ชื่อเต็ม)
+        "gemini-1.5-flash-latest",  # ตัวเลือกที่ 3 (ล่าสุด)
+        "gemini-1.5-flash-001"  # ตัวเลือกที่ 4 (เวอร์ชันระบุเลข)
+    ]
+
     last_error = ""
-    # ลอง 3 รอบ
-    for i in range(3):
+
+    # วนลูปโมเดลที่ปลอดภัย
+    for model_name in safe_models:
         try:
-            return client.models.generate_content(model=model, contents=contents)
+            # ลองยิง API
+            return client.models.generate_content(model=model_name, contents=contents)
         except Exception as e:
-            last_error = str(e)
-            if "429" in last_error:  # โควตาเต็ม ให้รอ
-                time.sleep(2 + i)  # รอ 2, 3, 4 วินาที
-                continue
-            elif "404" in last_error:  # หาโมเดลไม่เจอ ลองใช้ชื่อสำรอง
+            error_text = str(e)
+            last_error = error_text
+
+            # ถ้าเป็น 429 (Resource Exhausted) ของ 1.5 Flash -> ให้รอแล้วลองใหม่ที่ตัวเดิม
+            if "429" in error_text:
+                time.sleep(2)
                 try:
-                    return client.models.generate_content(model="gemini-1.5-flash-latest", contents=contents)
-                except Exception as e2:
-                    last_error = str(e2)
-                    time.sleep(1)
-                    continue
-            else:
-                # Error อื่นๆ ให้รอแป๊บแล้วลองใหม่
-                time.sleep(1)
+                    return client.models.generate_content(model=model_name, contents=contents)
+                except:
+                    continue  # ถ้ายังไม่ได้ ไปลองชื่ออื่น
+
+            # ถ้าเป็น 404 (Not Found) -> ไปลองชื่อถัดไปทันที
+            if "404" in error_text:
                 continue
 
-    # ถ้าหลุดลูปมาแสดงว่าล้มเหลว
-    raise Exception(f"Failed after 3 retries. Last error: {last_error}")
+            # Error อื่นๆ -> ข้ามไปลองตัวอื่น
+            continue
+
+    # ถ้าลองทุกชื่อแล้วยังไม่ได้
+    raise Exception(f"All models failed. Last error: {last_error}")
 
 
-# --- 5. ฟังก์ชัน PDF (ตัดทอนข้อมูลอัตโนมัติ) ---
+# --- 5. ฟังก์ชัน PDF (ตัดทอนข้อมูล 40k) ---
 def get_pdf_text(pdf_path):
     text = ""
     if os.path.exists(pdf_path):
@@ -106,18 +99,15 @@ def get_pdf_text(pdf_path):
                     c = page.extract_text()
                     if c: text += c
 
-            # --- IMPORTANT: ตัดทอนข้อมูล (Data Truncation) ---
-            # จำกัดไม่เกิน 40,000 ตัวอักษรเพื่อป้องกัน System Busy / Quota Limit
-            max_chars = 40000
-            if len(text) > max_chars:
-                text = text[:max_chars] + "\n...[เนื้อหาถูกตัดทอนบางส่วนเนื่องจากยาวเกินไป]..."
-
+            # ตัดทอนข้อมูลให้เหลือ 40,000 ตัวอักษร
+            if len(text) > 40000:
+                text = text[:40000] + "\n...[ตัดทอนข้อมูล]..."
         except:
             pass
     return text
 
 
-# --- 6. Admin & Sidebar ---
+# --- 6. Sidebar ---
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 with st.sidebar:
@@ -126,12 +116,11 @@ with st.sidebar:
         if f := st.file_uploader("Upload PDF", type="pdf"):
             with open("data.pdf", "wb") as file: file.write(f.getbuffer())
             st.success("Saved!")
-
     st.divider()
-    if MODEL_NAME:
-        st.success(f"✅ AI Ready: {MODEL_NAME.split('/')[-1]}")
+    if os.path.exists("data.pdf"):
+        st.success("✅ Database Ready")
     else:
-        st.error("❌ API Key Error")
+        st.warning("⚠️ No PDF")
 
 # --- 7. Chat ---
 st.divider()
@@ -143,31 +132,26 @@ if prompt := st.chat_input("ถามข้อมูลได้เลยคร�
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if os.path.exists("data.pdf") and client and MODEL_NAME:
+    if os.path.exists("data.pdf") and client:
         with st.chat_message("assistant"):
             with st.spinner("AI กำลังค้นหาคำตอบ..."):
                 try:
                     context = get_pdf_text("data.pdf")
 
-                    # ตรวจสอบว่ามีข้อมูล PDF จริงไหม
-                    if len(context) < 10:
-                        st.warning("⚠️ ไฟล์ PDF อ่านไม่ออก หรือไม่มีข้อความ (อาจเป็นไฟล์ภาพ)")
+                    if len(context) < 5:
+                        st.error("⚠️ ไฟล์ PDF ไม่มีข้อความ")
                     else:
+                        # เรียกฟังก์ชันที่ปลอดภัย
                         response = generate_safe(
                             client,
-                            MODEL_NAME,
                             [f"System: {SYSTEM_PROMPT}", f"Context: {context}", f"User: {prompt}"]
                         )
                         st.markdown(response.text)
                         st.session_state.chat_history.append({"role": "assistant", "content": response.text})
 
                 except Exception as e:
-                    # แสดง Error ที่แท้จริงออกมา
                     st.error(f"เกิดข้อผิดพลาด: {e}")
-
-                    if "403" in str(e) or "API key" in str(e):
-                        st.info("💡 คำแนะนำ: Key ของคุณอาจถูกระงับหรือใช้ไม่ได้ กรุณาสร้าง Key ใหม่")
-                    elif "429" in str(e):
-                        st.info("💡 คำแนะนำ: ระบบทำงานหนักเกินไป กรุณารอ 1 นาที")
+                    if "429" in str(e):
+                        st.info("💡 ระบบกำลังทำงานหนัก กรุณารอ 10 วินาที")
     else:
-        st.warning("กรุณาอัปโหลด PDF และตรวจสอบ API Key")
+        st.warning("กรุณาอัปโหลด PDF ก่อนใช้งาน")
