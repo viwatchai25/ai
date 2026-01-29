@@ -3,6 +3,7 @@ from google import genai
 from google.genai import types
 import PyPDF2
 import os
+import time
 from PIL import Image
 
 # --- 1. System Prompt ---
@@ -19,6 +20,7 @@ st.markdown("""
     .main { background-color: #f8f9fa; }
     .stButton>button { background-color: #003399; color: white; border-radius: 8px; width: 100%; }
     h1 { color: #003399; font-family: 'Sarabun', sans-serif; text-align: center; }
+    .stChatInput { position: fixed; bottom: 0; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -32,48 +34,45 @@ with col2:
 st.markdown("<h1>Digital CMRU Ai Service</h1>", unsafe_allow_html=True)
 
 
-# --- 3. ฟังก์ชันเชื่อมต่อ API และค้นหาโมเดล (แก้ไขจุดที่ Error) ---
+# --- 3. ฟังก์ชันเชื่อมต่อ API (Force Stable Model) ---
 @st.cache_resource
-def configure_genai():
+def get_client():
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
-        # ใช้ v1beta เพื่อให้เห็นโมเดลเยอะที่สุด
-        client = genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
-
-        # ดึงรายชื่อโมเดลทั้งหมด
-        available_models = client.models.list()
-        selected_model = None
-
-        # คำค้นหาตามลำดับความต้องการ (Flash เร็วและถูกที่สุด > Pro เก่งกว่า > หรือรุ่นอื่นๆ)
-        priority_keywords = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-
-        # วนลูปหาโมเดลที่ชื่อตรงกับที่เราอยากได้ (ตัดการเช็ค attribute ที่ error ออก)
-        # เราแปลงเป็น list ก่อนเพื่อความชัวร์ในการวนลูป
-        model_list = list(available_models)
-
-        for keyword in priority_keywords:
-            for m in model_list:
-                # ตรวจสอบแค่ชื่อก็เพียงพอแล้ว
-                if keyword in m.name:
-                    selected_model = m.name
-                    break
-            if selected_model: break
-
-        if not selected_model:
-            # ถ้าหาไม่เจอเลย ให้ลองใช้ชื่อ default (เผื่อฟลุ๊ค)
-            selected_model = "gemini-1.5-flash"
-
-        return client, selected_model
+        # ใช้ v1beta เพื่อความยืดหยุ่น แต่เราจะบังคับ model name ทีหลัง
+        return genai.Client(api_key=api_key, http_options={'api_version': 'v1beta'})
     except Exception as e:
-        # แสดง error แต่ไม่หยุดโปรแกรม เพื่อให้ user เห็นปัญหา
-        st.error(f"⚠️ ตั้งค่าระบบไม่สำเร็จ: {e}")
-        return None, None
+        st.error(f"⚠️ API Error: {e}")
+        return None
 
 
-client, MODEL_NAME = configure_genai()
+client = get_client()
 
 
-# --- 4. ฟังก์ชันดึง Text จาก PDF ---
+# --- 4. ฟังก์ชัน Retry Logic (หัวใจสำคัญแก้ 429) ---
+def generate_with_retry(client, model_name, contents):
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=contents
+            )
+        except Exception as e:
+            error_msg = str(e)
+            # ถ้าเป็น Error 429 (Quota) หรือ 503 (Server Overload) ให้รอแล้วลองใหม่
+            if "429" in error_msg or "503" in error_msg:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # รอ 2, 4, 6 วินาที
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise e  # ถ้าลองครบ 3 รอบแล้วยังไม่ได้ ให้แจ้ง Error จริง
+            else:
+                raise e  # ถ้าเป็น Error อื่น (เช่น 404) ให้แจ้งเลย
+
+
+# --- 5. ฟังก์ชันดึง Text จาก PDF ---
 def get_pdf_text(pdf_path):
     text = ""
     if os.path.exists(pdf_path):
@@ -88,10 +87,9 @@ def get_pdf_text(pdf_path):
     return text
 
 
-# --- 5. Session State ---
+# --- 6. Session State & Sidebar ---
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
-# --- 6. Admin Sidebar ---
 with st.sidebar:
     st.header("⚙️ Admin")
     if st.text_input("Password", type="password") == "admin123":
@@ -100,15 +98,11 @@ with st.sidebar:
             st.success("Saved!")
 
     st.divider()
-    if MODEL_NAME:
-        # แสดงชื่อโมเดลสั้นๆ (ตัด parts/models/ ออก)
-        display_name = MODEL_NAME.split('/')[-1]
-        st.caption(f"🚀 Model: **{display_name}**")
-    else:
-        st.error("❌ No Model Found")
-
     if os.path.exists("data.pdf"):
         st.info("✅ Database Ready")
+
+    # แสดงเครดิต
+    st.caption("Powered by Google Cloud Credit")
 
 # --- 7. Chat Interface ---
 st.divider()
@@ -120,28 +114,37 @@ if prompt := st.chat_input("ถามข้อมูลได้เลยคร�
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    if os.path.exists("data.pdf") and client and MODEL_NAME:
+    if os.path.exists("data.pdf") and client:
         with st.chat_message("assistant"):
-            with st.spinner(f"AI กำลังค้นหาคำตอบ..."):
-                try:
-                    context = get_pdf_text("data.pdf")
+            status_placeholder = st.empty()
+            status_placeholder.markdown("⏳ *AI กำลังค้นหาข้อมูล...*")
 
-                    response = client.models.generate_content(
-                        model=MODEL_NAME,  # ใช้ชื่อที่ระบบหามาให้
-                        contents=[
-                            f"System: {SYSTEM_PROMPT}",
-                            f"Context: {context}",
-                            f"User: {prompt}"
-                        ]
-                    )
-                    st.markdown(response.text)
-                    st.session_state.chat_history.append({"role": "assistant", "content": response.text})
-                except Exception as e:
+            try:
+                context = get_pdf_text("data.pdf")
+
+                # เรียกใช้ฟังก์ชัน Retry แทนการเรียกตรงๆ
+                # ใช้โมเดล 'gemini-1.5-flash' ซึ่งเสถียรที่สุดสำหรับ Billing Plan
+                response = generate_with_retry(
+                    client,
+                    model_name="gemini-1.5-flash",
+                    contents=[
+                        f"System: {SYSTEM_PROMPT}",
+                        f"Context: {context}",
+                        f"User: {prompt}"
+                    ]
+                )
+
+                status_placeholder.empty()  # ลบข้อความกำลังโหลด
+                st.markdown(response.text)
+                st.session_state.chat_history.append({"role": "assistant", "content": response.text})
+
+            except Exception as e:
+                status_placeholder.empty()
+                if "429" in str(e):
+                    st.error("⚠️ ระบบกำลังทำงานหนัก กรุณารอ 10 วินาทีแล้วถามใหม่ครับ")
+                elif "404" in str(e):
+                    st.error("⚠️ ไม่พบโมเดล (ลองเปลี่ยน API Key ใหม่หากเพิ่งเปิด Billing)")
+                else:
                     st.error(f"เกิดข้อผิดพลาด: {e}")
-                    if "429" in str(e):
-                        st.warning("⚠️ โควตาเต็มชั่วคราว กรุณารอ 30 วินาที")
     else:
-        if not os.path.exists("data.pdf"):
-            st.warning("กรุณาอัปโหลดไฟล์ PDF ก่อนใช้งาน")
-        if not client or not MODEL_NAME:
-            st.error("ระบบ AI ยังไม่พร้อมทำงาน (ตรวจสอบ API Key)")
+        st.warning("กรุณาอัปโหลดไฟล์ PDF ก่อนใช้งาน")
